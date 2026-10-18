@@ -1,0 +1,63 @@
+name: 📚 Sincronizar Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'wiki/**'
+      - '.github/workflows/sync-wiki.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-wiki:
+    name: Sincronizar documentación hacia GitHub Wiki
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Clonar repositorio principal
+        uses: actions/checkout@v4
+
+      - name: 🚀 Sincronizar wiki/ con la Wiki de GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          WIKI_REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.wiki.git"
+          
+          echo "Configurando identidad de Git..."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          echo "Intentando clonar el repositorio de la Wiki de GitHub..."
+          if ! git clone "$WIKI_REPO_URL" wiki_repo 2>&1; then
+            echo "::error title=Wiki no inicializada en GitHub::El repositorio de la Wiki aún no ha sido inicializado."
+            echo "👉 Para inicializarlo por única vez, visita: https://github.com/${{ github.repository }}/wiki y haz clic en 'Create the first page'."
+            exit 1
+          fi
+
+          echo "Limpiando versiones anteriores y copiando archivos nuevos..."
+          # Eliminar archivos existentes en la wiki (preservando .git)
+          find wiki_repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+
+          # Copiar todo el contenido de la carpeta wiki/
+          cp -r wiki/* wiki_repo/
+
+          cd wiki_repo
+
+          # Detectar el nombre de la rama activa en la wiki (usualmente master)
+          BRANCH_NAME=$(git branch --show-current)
+          [ -z "$BRANCH_NAME" ] && BRANCH_NAME="master"
+
+          git add .
+
+          if git diff --staged --quiet; then
+            echo "✅ No hay cambios pendientes. La Wiki ya se encuentra completamente actualizada."
+          else
+            git commit -m "docs(wiki): sincronización automática desde main [skip ci]"
+            git push origin "$BRANCH_NAME"
+            echo "🎉 ¡Wiki de GitHub actualizada y sincronizada con éxito!"
+          fi
