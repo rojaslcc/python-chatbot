@@ -248,3 +248,68 @@ streamlit run pdf-chatbot.py
 
 - **Protección de Datos Locales y Credenciales:** El archivo [`.gitignore`](./.gitignore) incluido protege automáticamente tus claves (`.env`, `.streamlit/secrets.toml`), los entornos virtuales (`.venv/`) y las bases de datos generadas (`data/`, `*.db`).
 - **Restricción de clave API:** En la [Consola de Google Cloud](https://console.cloud.google.com/apis/credentials), puedes restringir tu clave únicamente a la **Generative Language API** para mayor seguridad.
+
+---
+
+## 🤝 Dinámica de Contribución y Colaboración
+
+¡Las contribuciones de la comunidad son bienvenidas! Para mantener la calidad, seguridad y estabilidad de la rama principal, el repositorio se rige bajo una política estricta de **Ramas Feature y Pull Requests**.
+
+> [!IMPORTANT]
+> - La rama `main` se encuentra protegida contra pushes directos y force-pushes (`git push --force`).
+> - **Todos los cambios y aportes deben canalizarse mediante ramas `feature/` y Pull Requests.**
+> - **Exclusividad de Merge:** Por directiva de seguridad del repositorio, **únicamente el propietario (`@rojaslcc`) cuenta con privilegios para aprobar y realizar el merge de los PRs en `main`.**
+
+### 📋 Flujo de Trabajo para Colaborar
+
+1. **Crear un Fork del Repositorio:**
+   Haz clic en el botón **Fork** en la parte superior derecha de [rojaslcc/python-chatbot](https://github.com/rojaslcc/python-chatbot) para crear una copia en tu cuenta personal de GitHub.
+
+2. **Clonar tu Fork en tu entorno local:**
+   ```bash
+   git clone https://github.com/TU-USUARIO/python-chatbot.git
+   cd python-chatbot
+   ```
+
+3. **Configurar el repositorio remoto original (*upstream*):**
+   ```bash
+   git remote add upstream https://github.com/rojaslcc/python-chatbot.git
+   ```
+
+4. **Crear una rama temática desde `main` actualizado:**
+   ```bash
+   git checkout main
+   git pull upstream main
+   git checkout -b feature/nombre-de-la-mejora
+   ```
+   *(Recomendado usar prefijos semánticos: `feature/`, `fix/`, `docs/`, `refactor/`)*.
+
+5. **Desarrollar y probar tus cambios:**
+   - Activa tu entorno virtual (`source .venv/bin/activate` o `.venv\Scripts\Activate.ps1`).
+   - Sigue las normas de seguridad del proyecto: **bajo ninguna circunstancia confirmes claves secretas (`.env`) ni bases de datos locales (`data/`)**.
+   - Prueba que la aplicación inicie sin errores con `streamlit run pdf-chatbot.py`.
+
+6. **Registrar commits claros:**
+   ```bash
+   git add .
+   git commit -m "feat: descripción breve y clara del cambio"
+   ```
+
+7. **Subir la rama a tu Fork:**
+   ```bash
+   git push -u origin feature/nombre-de-la-mejora
+   ```
+
+8. **Abrir el Pull Request hacia `main`:**
+   - Abre un **Pull Request** desde tu rama hacia `main` en [https://github.com/rojaslcc/python-chatbot](https://github.com/rojaslcc/python-chatbot).
+   - O utiliza la CLI de GitHub si la tienes instalada:
+     ```bash
+     gh pr create --title "feat: título descriptivo" --body "Explicación detallada de la contribución"
+     ```
+   - Describe con claridad el propósito del cambio y qué pruebas realizaste.
+
+9. **Revisión, Resolución y Fusión:**
+   - Resuelve cualquier conversación o sugerencia dejada en la revisión del PR.
+   - Una vez validado, el propietario (**@rojaslcc**) realizará el merge a `main`.
+   - La rama de la feature se eliminará automáticamente del remoto tras la integración para mantener un historial limpio.
+
