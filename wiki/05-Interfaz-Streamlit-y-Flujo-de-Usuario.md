@@ -103,3 +103,10 @@ Cuando un PDF está activo:
    - Se muestra un spinner reactivo: *"Analizando documento y generando respuesta..."*.
    - Se genera la respuesta con la cadena RAG y se guarda en `chat_history.db`.
    - Se invoca `st.rerun()` para que el nuevo mensaje forme parte del historial permanente.
+
+---
+
+## 🧭 Navegación entre Capítulos
+
+| [⬅️ Anterior: 4. Procesamiento Vectorial y RAG](04-Procesamiento-Vectorial-y-RAG) | [🏠 Inicio (Home)](Home) |
+| :--- | :--- |

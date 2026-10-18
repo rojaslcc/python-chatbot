@@ -128,3 +128,10 @@ page_documents.append(Document(
 ))
 ```
 Esto preserva el número de página de forma inmutable durante la posterior fase de división en fragmentos.
+
+---
+
+## 🧭 Navegación entre Capítulos
+
+| [⬅️ Anterior: 2. Persistencia y Bases de Datos SQLite](02-Persistencia-y-Bases-de-Datos) | [🏠 Inicio (Home)](Home) | [Siguiente: 4. Procesamiento Vectorial y RAG ➡️](04-Procesamiento-Vectorial-y-RAG) |
+| :--- | :--- | :--- |

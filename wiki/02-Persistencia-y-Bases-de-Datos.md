@@ -142,3 +142,10 @@ Limpia únicamente los mensajes de conversación de ese documento en `chat_histo
 # database.py: Línea 303
 cursor.execute("DELETE FROM chat_messages WHERE document_id = ?;", (document_id,))
 ```
+
+---
+
+## 🧭 Navegación entre Capítulos
+
+| [⬅️ Anterior: 1. Arquitectura General](01-Arquitectura-General) | [🏠 Inicio (Home)](Home) | [Siguiente: 3. Extracción y OCR Multimodal ➡️](03-Extraccion-y-OCR-Multimodal) |
+| :--- | :--- | :--- |

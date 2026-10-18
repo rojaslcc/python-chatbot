@@ -85,3 +85,10 @@ Streamlit reejecuta el script completo de arriba a abajo cada vez que el usuario
    - El índice vectorial en memoria `vector_store`, el ID del documento activo `active_doc_id` y el nombre `active_doc_name` se almacenan en `st.session_state` para evitar recargas redundantes.
 2. **Independencia de la Base de Datos:**
    - Si el usuario recarga la pestaña del navegador o reinicia el servidor, el estado en memoria se reinicia, pero **los datos no se pierden**: la aplicación lee `database.get_all_documents()` y permite continuar exactamente donde se quedó en 1 clic.
+
+---
+
+## 🧭 Navegación entre Capítulos
+
+| [🏠 Inicio (Home)](Home) | [Siguiente: 2. Persistencia y Bases de Datos SQLite ➡️](02-Persistencia-y-Bases-de-Datos) |
+| :--- | :--- |
