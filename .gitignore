@@ -1,0 +1,20 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables & secrets (NEVER commit these!)
+.env
+.env.local
+.streamlit/secrets.toml
+
+# SQLite local databases and persistence
+data/
+*.db
+*.sqlite
+*.sqlite3
