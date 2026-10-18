@@ -121,3 +121,10 @@ Al invocar `chain.invoke(user_question)`:
 3. `prompt` ensambla el contexto con la pregunta.
 4. `llm` (con fallbacks) genera la respuesta textual.
 5. `StrOutputParser` limpia y extrae el texto puro para mostrarlo en Streamlit.
+
+---
+
+## 🧭 Navegación entre Capítulos
+
+| [⬅️ Anterior: 3. Extracción y OCR Multimodal](03-Extraccion-y-OCR-Multimodal) | [🏠 Inicio (Home)](Home) | [Siguiente: 5. Interfaz Streamlit y Flujo de Usuario ➡️](05-Interfaz-Streamlit-y-Flujo-de-Usuario) |
+| :--- | :--- | :--- |

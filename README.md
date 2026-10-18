@@ -14,7 +14,7 @@ Un chatbot conversacional inteligente desarrollado en **Python** con **Streamlit
 6. **Purgado y Eliminación Completa:** Permite borrar tanto el historial de chat como el documento completo (metadatos, vectores y mensajes) en un solo clic.
 
 > [!TIP]
-> 📖 **Wiki Técnica Detallada:** Para una explicación exhaustiva de cada fase, diagrama de arquitectura y referencias a las líneas de código fuente exactas, visita la [Wiki Oficial del Proyecto](./wiki/Home.md).
+> 📖 **Wiki Técnica Detallada:** Para una explicación exhaustiva de cada fase, diagrama de arquitectura y referencias a las líneas de código fuente exactas, visita la [Wiki Oficial del Proyecto](https://github.com/rojaslcc/python-chatbot/wiki).
 
 ---
 
