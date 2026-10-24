@@ -13,6 +13,7 @@ Incluye verificación y creación automática de las bases de datos "al vuelo" s
 import os
 import sqlite3
 import hashlib
+import json
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from langchain_community.vectorstores import FAISS
@@ -74,6 +75,27 @@ def init_databases() -> Dict[str, bool]:
         # Índices para optimizar búsquedas por hash y recuperación por documento
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON document_chunks(document_id);")
+        # Separar trabajos pendientes de documents evita ofrecer al chat un indice
+        # incompleto. NULL distingue un vector pendiente de uno confirmado.
+        # CREATE IF NOT EXISTS incorpora estas tablas sin borrar documentos previos.
+        cursor.executescript("""
+            CREATE TABLE IF NOT EXISTS indexing_jobs (
+                id TEXT PRIMARY KEY,
+                metadata TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS indexing_chunks (
+                job_id TEXT NOT NULL REFERENCES indexing_jobs(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                embedding BLOB,
+                PRIMARY KEY (job_id, chunk_index)
+            );
+            CREATE TABLE IF NOT EXISTS embedding_schedule (
+                scope TEXT PRIMARY KEY,
+                next_request_at REAL NOT NULL
+            );
+        """)
         conn.commit()
 
     # 3. Inicializar BD de Historial de Chat
@@ -104,6 +126,117 @@ def init_databases() -> Dict[str, bool]:
 def calculate_file_hash(file_bytes: bytes) -> str:
     """Calcula el hash SHA-256 de los bytes de un archivo para detección de duplicados."""
     return hashlib.sha256(file_bytes).hexdigest()
+
+
+# ==============================================================================
+# TRABAJOS DE INDEXACION Y AGENDA COMPARTIDA (documents.db)
+# Estas operaciones mantienen checkpoints separados del historial consultable:
+# documents solo recibe el resultado cuando todos los fragmentos tienen vector.
+# ==============================================================================
+def get_indexing_job(job_id: str) -> Optional[Dict[str, Any]]:
+    """Recupera metadatos JSON y fragmentos ordenados para continuar un trabajo.
+
+    Los vectores confirmados se deserializan desde float32; los pendientes
+    conservan None. El orden por chunk_index mantiene alineados texto, pagina y
+    vector tanto al reanudar como al construir posteriormente el indice FAISS.
+    """
+    with sqlite3.connect(DOCUMENTS_DB_PATH, timeout=15) as conn:
+        row = conn.execute(
+            "SELECT metadata FROM indexing_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        chunks = conn.execute("""
+            SELECT chunk_index, page_number, content, embedding
+            FROM indexing_chunks WHERE job_id = ? ORDER BY chunk_index
+        """, (job_id,)).fetchall()
+    return {
+        **json.loads(row[0]),
+        "chunks": [
+            {
+                "chunk_index": idx,
+                "page_number": page,
+                "content": text,
+                "embedding": np.frombuffer(blob, dtype=np.float32).tolist()
+                if blob is not None else None,
+            }
+            for idx, page, text, blob in chunks
+        ],
+    }
+
+
+def create_indexing_job(
+    job_id: str, metadata: Dict[str, Any], chunks: List[Dict[str, Any]]
+) -> None:
+    """Guarda la extraccion completa antes de consumir cuota de embeddings.
+
+    metadata incluye filename, total_pages, has_ocr y model; cada fragmento lleva
+    chunk_index, page_number y content. Cabecera y fragmentos se confirman juntos.
+    Si el ID ya existe, no se reemplaza: se preservan sus vectores y el motor
+    vuelve a cargar el trabajo persistido antes de procesarlo.
+    """
+    with sqlite3.connect(DOCUMENTS_DB_PATH, timeout=15) as conn:
+        conn.execute("PRAGMA foreign_keys = ON;")
+        inserted = conn.execute(
+            "INSERT OR IGNORE INTO indexing_jobs VALUES (?, ?)",
+            (job_id, json.dumps(metadata)),
+        )
+        # Otra sesion pudo crear el mismo ID. No reinsertar sus fragmentos evita
+        # sobrescribir checkpoints confirmados o duplicar la extraccion guardada.
+        if inserted.rowcount:
+            conn.executemany("""
+                INSERT INTO indexing_chunks
+                (job_id, chunk_index, page_number, content) VALUES (?, ?, ?, ?)
+            """, [
+                (job_id, c["chunk_index"], c["page_number"], c["content"])
+                for c in chunks
+            ])
+
+
+def save_indexing_batch(job_id: str, chunks: List[Dict[str, Any]]) -> None:
+    """Confirma en una transaccion los vectores de un lote previamente validado.
+
+    Cada elemento contiene chunk_index y embedding. El contexto de conexion
+    confirma todas las actualizaciones al salir o revierte si alguna falla;
+    la siguiente reanudacion omite unicamente los lotes confirmados.
+    """
+    with sqlite3.connect(DOCUMENTS_DB_PATH, timeout=15) as conn:
+        conn.executemany("""
+            UPDATE indexing_chunks SET embedding = ?
+            WHERE job_id = ? AND chunk_index = ?
+        """, [
+            (np.asarray(c["embedding"], dtype=np.float32).tobytes(),
+             job_id, c["chunk_index"])
+            for c in chunks
+        ])
+
+
+def reserve_embedding_slot(
+    scope: str, units: int, limit: int, now: float, max_wait: float
+) -> float:
+    """Reserva un turno y devuelve los segundos que debe esperar el llamador.
+
+    scope es el hash de clave/modelo, units cuenta contenidos y limit es el
+    presupuesto por minuto. now usa tiempo Unix para compartir la agenda entre
+    procesos. BEGIN IMMEDIATE serializa lectura y actualizacion del turno.
+    Una espera mayor a max_wait se devuelve sin reservar: el motor pausara el
+    trabajo sin seguir extendiendo una cola que no puede atender.
+    """
+    with sqlite3.connect(DOCUMENTS_DB_PATH, timeout=15) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT next_request_at FROM embedding_schedule WHERE scope = ?", (scope,)
+        ).fetchone()
+        scheduled = max(now, row[0] if row else now)
+        if scheduled - now > max_wait:
+            return scheduled - now
+        # Reservar el intervalo completo del lote cuenta cada contenido, no solo
+        # la peticion HTTP. El llamador duerme despues de liberar esta conexion.
+        conn.execute(
+            "INSERT OR REPLACE INTO embedding_schedule VALUES (?, ?)",
+            (scope, scheduled + 60 * units / limit),
+        )
+    return scheduled - now
 
 
 # ==============================================================================
@@ -160,7 +293,8 @@ def save_document(
     total_pages: int,
     total_chunks: int,
     has_ocr: int,
-    chunks: List[Dict[str, Any]]
+    chunks: List[Dict[str, Any]],
+    indexing_job_id: Optional[str] = None,
 ) -> None:
     """
     Guarda los metadatos del documento y todos sus fragmentos con sus vectores
@@ -201,7 +335,12 @@ def save_document(
             (document_id, chunk_index, page_number, content, embedding)
             VALUES (?, ?, ?, ?, ?);
         """, chunks_records)
-        
+        if indexing_job_id is not None:
+            # Publicar y retirar el checkpoint en la misma transaccion evita
+            # perder la reanudacion si falla la insercion del documento completo.
+            # foreign_keys elimina tambien los indexing_chunks del trabajo.
+            cursor.execute("DELETE FROM indexing_jobs WHERE id = ?", (indexing_job_id,))
+
         conn.commit()
 
 
