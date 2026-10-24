@@ -23,6 +23,7 @@ from langchain_core.runnables import RunnablePassthrough
 
 # Módulo propio de persistencia SQLite para documentos, vectores e historial de chat
 import database
+import indexing
 
 # ==============================================================================
 # 0. VERIFICACIÓN Y CREACIÓN AUTOMÁTICA DE BASES DE DATOS SQLITE AL VUELO
@@ -127,7 +128,7 @@ st.set_page_config(
 embeddings_model = None
 if GOOGLE_API_KEY:
     embeddings_model = GoogleGenerativeAIEmbeddings(
-        model="models/gemini-embedding-001",
+        model=indexing.EMBEDDING_MODEL,
         google_api_key=GOOGLE_API_KEY
     )
 
@@ -146,7 +147,7 @@ with st.sidebar:
         )
         if GOOGLE_API_KEY:
             embeddings_model = GoogleGenerativeAIEmbeddings(
-                model="models/gemini-embedding-001",
+                model=indexing.EMBEDDING_MODEL,
                 google_api_key=GOOGLE_API_KEY
             )
             
@@ -156,6 +157,31 @@ with st.sidebar:
         value=True, 
         help="Si una página contiene texto e imágenes/gráficos adicionales, también analiza las imágenes con OCR."
     )
+
+    # --------------------------------------------------------------------------
+    # PRESUPUESTO OPERATIVO PARA LA INDEXACION REANUDABLE
+    # Es local y por contenido, no una cuota garantizada de Google.
+    # Estos valores controlan la indexacion; no cambian los fallbacks del chat.
+    # --------------------------------------------------------------------------
+    with st.expander("Indexación de documentos grandes"):
+        contents_per_minute = st.number_input(
+            "Contenidos de embeddings por minuto", min_value=1, value=60,
+            help="Presupuesto conservador por fragmento, no una garantía de cuota. "
+                 "Ajústalo según AI Studio; otras aplicaciones pueden consumir la misma cuota.",
+        )
+        indexing_batch_size = st.number_input(
+            "Fragmentos por lote", min_value=1,
+            max_value=min(100, int(contents_per_minute)),
+            value=min(10, int(contents_per_minute)),
+        )
+        indexing_max_retries = st.number_input(
+            "Reintentos por lote", min_value=0, max_value=10, value=3,
+        )
+        indexing_max_wait = st.number_input(
+            "Espera máxima por pausa (segundos)", min_value=1, value=120,
+        )
+        st.caption("El avance se guarda por lote. Para reanudar, sube el mismo PDF "
+                   "con la misma opción de OCR y pulsa el botón de procesamiento.")
     
     st.divider()
     st.title("📁 Gestión de Documentos")
@@ -254,17 +280,40 @@ if chosen_doc_id == UPLOAD_NEW_OPTION and uploaded_file is not None:
             st.session_state.selected_doc_option = existing_doc["id"]
             st.rerun()
     else:
+        # ----------------------------------------------------------------------
+        # RECUPERACION DEL CHECKPOINT Y ARRANQUE EXPLICITO
+        # Un archivo no publicado puede tener texto y vectores parciales en SQLite.
+        # Se recupera por su configuracion, sin ofrecerlo aun en el selector de chat.
+        # ----------------------------------------------------------------------
+        # El ID incluye la politica de OCR y la version de procesamiento para no
+        # recuperar vectores de una extraccion incompatible del mismo archivo.
+        job_id = indexing.job_id_for(file_hash, ocr_embedded_images)
+        pending_job = database.get_indexing_job(job_id)
+        if pending_job:
+            done = sum(c["embedding"] is not None for c in pending_job["chunks"])
+            st.info(f"Indexación pendiente: {done}/{len(pending_job['chunks'])} "
+                    "fragmentos guardados. No se repetirá la extracción ni el OCR.")
+        # Streamlit reejecuta el script al modificar widgets. Exigir un clic
+        # impide reenviar embeddings automaticamente al ajustar configuracion.
+        if not st.button("Reanudar indexación" if pending_job else "Procesar documento",
+                         type="primary", key="process_uploaded_document"):
+            st.stop()
         # 2. Documento nuevo: extraer texto, ejecutar OCR si es necesario y generar embeddings
         with st.status("Procesando y vectorizando documento nuevo...", expanded=True) as status_box:
             with pdfplumber.open(uploaded_file) as pdf:
                 total_pages = len(pdf.pages)
                 status_box.write(f"📄 Total de páginas detectadas: {total_pages}")
                 
-                page_documents = []
-                any_ocr_used = False
+                # Los fragmentos recuperados ya estan segmentados y conservan
+                # sus paginas; no deben pasar de nuevo por OCR ni por el splitter.
+                page_documents = [
+                    Document(page_content=c["content"], metadata={"page": c["page_number"]})
+                    for c in pending_job["chunks"]
+                ] if pending_job else []
+                any_ocr_used = bool(pending_job["has_ocr"]) if pending_job else False
                 
                 # Iterar por cada página del PDF para extraer información textual o visual
-                for idx, page in enumerate(pdf.pages):
+                for idx, page in enumerate(pdf.pages if not pending_job else []):
                     page_num = idx + 1
                     page_text = page.extract_text() or ""
                     extracted_text = ""
@@ -335,7 +384,7 @@ if chosen_doc_id == UPLOAD_NEW_OPTION and uploaded_file is not None:
                 chunk_size=1000,
                 chunk_overlap=200
             )
-            chunks = text_splitter.split_documents(page_documents)
+            chunks = page_documents if pending_job else text_splitter.split_documents(page_documents)
             
             # ------------------------------------------------------------------
             # GENERACIÓN DE EMBEDDINGS CON GEMINI (POR LOTES)
@@ -343,29 +392,58 @@ if chosen_doc_id == UPLOAD_NEW_OPTION and uploaded_file is not None:
             status_box.write(f"🧠 Generando embeddings para {len(chunks)} fragmentos con Gemini...")
             chunk_texts = [c.page_content for c in chunks]
             
-            # Procesar embeddings en lotes de 50 para evitar exceder límites de payload de la API
-            all_embeddings = []
-            batch_size = 50
-            for b_idx in range(0, len(chunk_texts), batch_size):
-                batch = chunk_texts[b_idx:b_idx + batch_size]
-                batch_embs = embeddings_model.embed_documents(batch)
-                all_embeddings.extend(batch_embs)
+            # Este es el primer checkpoint: antes de el, una interrupcion obliga
+            # a repetir la extraccion; despues, cada lote confirma su propio avance.
+            if not pending_job:
+                database.create_indexing_job(
+                    job_id,
+                    {"filename": uploaded_file.name, "total_pages": total_pages,
+                     "has_ocr": int(any_ocr_used), "model": indexing.EMBEDDING_MODEL},
+                    [{"chunk_index": i, "page_number": c.metadata.get("page", 1),
+                      "content": c.page_content} for i, c in enumerate(chunks)],
+                )
+            progress = st.progress(0, text="Recuperando avance de indexación...")
+            progress_message = st.empty()
+
+            def report_indexing(completed, total, message):
+                """Muestra vectores confirmados; las esperas no aumentan el contador."""
+                progress.progress(completed / total, text=f"Embeddings: {completed}/{total}")
+                progress_message.info(message)
+
+            # La interfaz delega las esperas y reintentos al motor. El callback
+            # solo presenta avances confirmados; no decide si repetir solicitudes.
+            try:
+                chunks_data = indexing.index_job(
+                    job_id, lambda texts: indexing.embed_batch(embeddings_model, texts),
+                    GOOGLE_API_KEY,
+                    indexing.IndexingSettings(
+                        contents_per_minute=int(contents_per_minute),
+                        batch_size=int(indexing_batch_size),
+                        max_retries=int(indexing_max_retries),
+                        max_wait_seconds=float(indexing_max_wait),
+                    ),
+                    report_indexing,
+                )
+            except indexing.IndexingPaused as error:
+                # No continuar a save_document: el historial solo debe contener
+                # indices completos. SQLite conserva el trabajo para otro clic.
+                status_box.update(label="Indexación pausada", state="error")
+                st.error(str(error))
+                st.caption("Corrige la causa si es necesario y pulsa «Reanudar indexación». "
+                           "No se repetirán los lotes guardados.")
+                if error.__cause__:
+                    with st.expander("Detalle técnico"):
+                        st.exception(error.__cause__)
+                st.stop()
+            all_embeddings = [c["embedding"] for c in chunks_data]
                 
             # ------------------------------------------------------------------
             # PERSISTENCIA EN BASE DE DATOS VECTORIAL SQLITE (data/documents.db)
             # ------------------------------------------------------------------
             status_box.write("💾 Persistiendo documento y base vectorial en SQLite (`data/documents.db`)...")
             new_doc_id = file_hash[:16]
-            chunks_data = []
-            for c_idx, (chunk, emb) in enumerate(zip(chunks, all_embeddings)):
-                chunks_data.append({
-                    "chunk_index": c_idx,
-                    "page_number": chunk.metadata.get("page", 1),
-                    "content": chunk.page_content,
-                    "embedding": emb
-                })
-                
-            # Guardar metadatos y vectores binarios float32 en SQLite
+            # Publicar metadatos y vectores retira tambien el checkpoint en la
+            # misma transaccion. Si falla, el trabajo sigue disponible al reanudar.
             database.save_document(
                 doc_id=new_doc_id,
                 filename=uploaded_file.name,
@@ -374,7 +452,8 @@ if chosen_doc_id == UPLOAD_NEW_OPTION and uploaded_file is not None:
                 total_pages=total_pages,
                 total_chunks=len(chunks),
                 has_ocr=1 if any_ocr_used else 0,
-                chunks=chunks_data
+                chunks=chunks_data,
+                indexing_job_id=job_id,
             )
             
             # ------------------------------------------------------------------

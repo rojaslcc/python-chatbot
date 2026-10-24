@@ -34,12 +34,11 @@ Los documentos PDF del mundo real presentan tres casuísticas distintas que el s
 
 ---
 
-## 🛠️ Motor de OCR Local en Memoria (`pdf-chatbot.py`: Líneas 53-60)
+## 🛠️ Motor de OCR Local en Memoria (`get_ocr_engine`)
 
 Para evitar recargar la red neuronal ONNX en cada página o petición de usuario, se utiliza el decorador `@st.cache_resource` de Streamlit:
 
 ```python
-# pdf-chatbot.py: Líneas 53-60
 @st.cache_resource
 def get_ocr_engine():
     """
@@ -54,13 +53,12 @@ def get_ocr_engine():
 
 ---
 
-## 📷 Función Resiliente de OCR (`pdf-chatbot.py`: Líneas 62-108)
+## 📷 Función Resiliente de OCR (`extract_text_from_image`)
 
 La función `extract_text_from_image(pil_img, api_key)` implementa una doble capa de extracción:
 
-### Nivel 1: Procesamiento Local con RapidOCR (`pdf-chatbot.py`: Líneas 69-75)
+### Nivel 1: Procesamiento Local con RapidOCR
 ```python
-# pdf-chatbot.py: Líneas 69-75
 engine = get_ocr_engine()
 img_np = np.array(pil_img.convert("RGB"))
 result, _ = engine(img_np)
@@ -73,14 +71,13 @@ if result:
 - Extrae todas las líneas detectadas por el modelo ONNX y las une con saltos de línea.
 - **Costo:** 0 peticiones de API, 100% privado y local.
 
-### Nivel 2: Fallback Secundario con Gemini Vision (`pdf-chatbot.py`: Líneas 77-106)
+### Nivel 2: Fallback Secundario con Gemini Vision
 Si ocurre una excepción inesperada en el motor local y el usuario dispone de clave de API:
 1. Se redimensiona la imagen a un máximo de 1600 px para ahorrar ancho de banda.
 2. Se codifica en Base64 JPEG.
 3. Se invoca a `ChatGoogleGenerativeAI(model="gemini-flash-lite-latest")` con una instrucción especializada para transcribir tablas, textos y números visuales:
 
 ```python
-# pdf-chatbot.py: Líneas 93-103
 msg = HumanMessage(content=[
     {"type": "text", "text": "Transcribe accurately all text, numbers, and tables in this image. Only return the transcribed text."},
     {"type": "image_url", "image_url": f"data:image/jpeg;base64,{img_b64}"}
@@ -90,11 +87,12 @@ res = vision_llm.invoke([msg])
 
 ---
 
-## 🔬 Flujo de Inspección Página a Página (`pdf-chatbot.py`: Líneas 241-314)
+## 🔬 Flujo de Inspección Página a Página (`pdf-chatbot.py`)
 
-Al subir un nuevo PDF, se abre con `pdfplumber.open(uploaded_file)` y se recorren sus páginas:
+Al pulsar **Procesar documento** para un PDF sin trabajo previo, se abre con
+`pdfplumber.open(uploaded_file)` y se recorren sus páginas:
 
-### 1. Detección de Páginas Escaneadas (`pdf-chatbot.py`: Líneas 255-268)
+### 1. Detección de Páginas Escaneadas
 Si `len(page_text.strip()) < 30`, la página carece de texto vectorial:
 - Se renderiza la página completa a imagen con resolución optimizada:
   ```python
@@ -103,12 +101,12 @@ Si `len(page_text.strip()) < 30`, la página carece de texto vectorial:
   ```
 - Se añade un encabezado semántico: `\n--- Página {page_num} (OCR) ---\n` para que el LLM sepa que proviene de un escaneo.
 
-### 2. Páginas con Texto Digital Seleccionable (`pdf-chatbot.py`: Líneas 269-273)
+### 2. Páginas con Texto Digital Seleccionable
 Si la página contiene texto seleccionable:
 - Se extrae directamente con `page.extract_text()`.
 - Se añade el prefijo: `\n--- Página {page_num} ---\n`.
 
-### 3. Detección y Recorte de Diagramas e Infografías (`pdf-chatbot.py`: Líneas 274-307)
+### 3. Detección y Recorte de Diagramas e Infografías
 Si la opción `ocr_embedded_images` está activada en la barra lateral y `len(page.images) > 0`:
 - **Filtro de Relevancia:** Se descartan imágenes menores a $120 \times 120\text{ px}$ (evita procesar íconos, viñetas decorativas o pequeños logos).
 - **Recorte por Coordenadas Bounding Box:**
@@ -119,7 +117,7 @@ Si la opción `ocr_embedded_images` está activada en la barra lateral y `len(pa
   ```
 - Se etiqueta el contenido: `\n[Contenido de imagen #N en Pág. X]:\n...`.
 
-### 4. Empaquetado con Metadatos (`pdf-chatbot.py`: Líneas 308-314)
+### 4. Empaquetado con Metadatos
 Cada página resultante se convierte en un objeto `Document` de LangChain:
 ```python
 page_documents.append(Document(
@@ -128,6 +126,22 @@ page_documents.append(Document(
 ))
 ```
 Esto preserva el número de página de forma inmutable durante la posterior fase de división en fragmentos.
+
+### Recuperación sin repetir OCR
+
+Después de completar la extracción y segmentación, se guardan todos los textos en
+`indexing_chunks` antes de solicitar embeddings. Al **Reanudar indexación** del
+mismo archivo con la misma opción de OCR, se recuperan esos textos y sus páginas:
+no se vuelve a ejecutar `page.extract_text()` ni RapidOCR.
+
+La extracción no tiene checkpoints por página; si se interrumpe antes de guardar
+el trabajo completo, deberá repetirse. Cambiar la casilla de OCR genera otra
+identidad de trabajo y otra extracción. Los controles de cuota y reintentos de
+`indexing.py` aplican a embeddings, no al fallback de Gemini Vision del OCR.
+
+Consulta [Persistencia](02-Persistencia-y-Bases-de-Datos) para los puntos de
+recuperación y [Flujo de usuario](05-Interfaz-Streamlit-y-Flujo-de-Usuario) para
+reanudar desde la interfaz.
 
 ---
 
